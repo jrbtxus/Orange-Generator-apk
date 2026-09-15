@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  启动画面（windowBackground）。
+
+  为什么不用整张方图当背景：方图按原始像素尺寸居中显示，在不同屏幕比例下
+  要么铺不满、要么被裁切（旧方案就是这样把标题切掉了一半）。
+
+  现在的结构：
+    1. 竖向渐变铺满全屏 —— 与页面本体 loading-layer / body 的
+       `linear-gradient(180deg, #92d2f6 0%, #92d2f6 62%, #ffffff 100%)` 同色系，
+       所以启动图淡出、WebView 首帧出现时不会闪白或跳色；
+    2. 中间叠加固定像素尺寸的主视觉（drawable-nodpi/splash_art.png）。
+
+  注：Capacitor 不调用 installSplashScreen()，Theme.SplashScreen 的
+  windowSplashScreenAnimatedIcon 等属性不生效，实际显示的就是这个 windowBackground。
+-->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item>
+        <shape android:shape="rectangle">
+            <gradient
+                android:angle="270"
+                android:startColor="#92D2F6"
+                android:endColor="#FFFFFF"
+                android:type="linear" />
+        </shape>
+    </item>
+    <item android:gravity="center">
+        <bitmap
+            android:gravity="center"
+            android:src="@drawable/splash_art" />
+    </item>
+</layer-list>

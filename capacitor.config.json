@@ -1,0 +1,12 @@
+{
+  "appId": "io.github.jrbtxus.orangegenerator",
+  "appName": "贴贴岛",
+  "webDir": "dist",
+  "android": {
+    "allowMixedContent": true,
+    "webContentsDebuggingEnabled": true
+  },
+  "server": {
+    "androidScheme": "https"
+  }
+}

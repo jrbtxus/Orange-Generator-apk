@@ -1,0 +1,44 @@
+{
+  "name": "orange-sticker-studio",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "rsbuild dev",
+    "build": "rsbuild build",
+    "font:subset": "node scripts/subset-font.mjs",
+    "preview": "rsbuild preview",
+    "typecheck": "tsc --noEmit",
+    "icon:android": "node scripts/generate-android-icons.mjs",
+    "verify:android": "bash scripts/verify-android.sh",
+    "cap:sync": "rsbuild build && cap sync android",
+    "cap:open": "cap open android",
+    "android:apk": "npm run cap:sync && cd android && ./gradlew assembleDebug"
+  },
+  "dependencies": {
+    "@capacitor/android": "^7.6.9",
+    "@capacitor/app": "^7.1.2",
+    "@capacitor/core": "^7.6.9",
+    "@phosphor-icons/react": "^2.1.10",
+    "animal-island-ui": "^1.4.0",
+    "classnames": "^2.5.1",
+    "gifenc": "^1.0.3",
+    "gifuct-js": "^2.1.2",
+    "konva": "^10.3.0",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "react-konva": "^19.2.5"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^7.6.9",
+    "@rsbuild/core": "^2.1.9",
+    "@rsbuild/plugin-react": "^2.1.0",
+    "@types/node": "^26.1.2",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.4",
+    "fontkit": "^2.0.4",
+    "subset-font": "^2.5.0",
+    "typescript": "^7.0.2"
+  },
+  "packageManager": "pnpm@11.9.0"
+}

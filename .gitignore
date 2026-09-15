@@ -1,0 +1,19 @@
+node_modules/
+dist/
+.cache/
+__pycache__/
+*.pyc
+.DS_Store
+*.log
+tmp/
+
+# 只留本机的交接 / 安全说明，不进仓库
+HANDOVER.md
+/handover/
+
+# 安卓本机构建产物与签名材料（绝不允许入库）
+android/keystore.properties
+android/local.properties
+*.jks
+*.keystore
+android-out/

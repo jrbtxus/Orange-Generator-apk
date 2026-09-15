@@ -1,0 +1,225 @@
+# SPDX-License-Identifier: MIT
+#
+# 云端把 Web 前端（Rsbuild）打包进 Capacitor 的安卓壳，一次同时产出
+# debug 与 release 两个 APK，两者使用同一套固定 keystore 签名
+# （所以签名不随构建机变化，两个包可以互相覆盖升级）。
+#
+# 触发：手动（Actions → Build APK → Run workflow）或推送到 main。
+# 产物：两个独立 artifact（Actions 页面各一条）
+#   orange-generator-debug-<sha>    → app-debug.apk
+#   orange-generator-release-<sha>  → app-release.apk
+#
+# 需要的仓库 Secrets（Settings → Secrets and variables → Actions）：
+#   ORANGE_KEYSTORE_BASE64     keystore 的 base64（base64 -w0 orange-release.jks）
+#   ORANGE_KEYSTORE_PASSWORD   keystore 口令
+#   ORANGE_KEY_ALIAS           key 别名
+#   ORANGE_KEY_PASSWORD        key 口令（PKCS12 下与 keystore 口令相同）
+#   ORANGE_KEYSTORE_FILENAME   落盘文件名，默认 orange-release.jks（可选）
+#
+# 注意：workflow 改动属于高风险改动，改完请先在本地用
+#   python3 -c "import yaml,sys;yaml.safe_load(open('.github/workflows/build-apk.yml'))"
+# 校验一遍再推（YAML 缩进被破坏时 GitHub 只会丢一句 "workflow file issue"）。
+
+name: Build APK
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      # 纯文档改动不必重编 APK（真要重编就手动 Run workflow）
+      - "**.md"
+      - "LICENSE"
+      - ".gitignore"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Assemble debug + release APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+
+    env:
+      # 固定签名：keystore 文件由下面的 decode 步骤写入并导出 ORANGE_KEYSTORE_FILE
+      ORANGE_KEYSTORE_FILENAME: ${{ secrets.ORANGE_KEYSTORE_FILENAME || 'orange-release.jks' }}
+      ORANGE_KEYSTORE_PASSWORD: ${{ secrets.ORANGE_KEYSTORE_PASSWORD }}
+      ORANGE_KEY_ALIAS: ${{ secrets.ORANGE_KEY_ALIAS }}
+      ORANGE_KEY_PASSWORD: ${{ secrets.ORANGE_KEY_PASSWORD }}
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      # ubuntu-latest 自带 Android SDK（ANDROID_HOME=/usr/local/lib/android/sdk、
+      # cmdline-tools + 各版本 platform/build-tools），因此不需要 android-actions/setup-android
+      # （v3 会去装已下架的 "tools" 包而直接报错）。这里只做一次可见性检查。
+      - name: Check Android SDK on runner
+        run: |
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          ls "$ANDROID_HOME/platforms" || true
+          ls "$ANDROID_HOME/build-tools" || true
+
+      - name: Install npm dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Type-check (tsc --noEmit)
+        run: npm run typecheck
+
+      - name: Build web bundle + sync into native project
+        run: npm run cap:sync
+
+      # 图标 / 启动图（android/app/src/main/res/mipmap-*、drawable-nodpi/splash_art.png）
+      # 已随仓库提交。品牌图或 scripts/generate-android-icons.mjs 改了，
+      # 就在本机跑 `npm run icon:android` 重新生成并提交（CI 不依赖 Pillow，
+      # 也避免不同 Pillow 版本的缩放差异把构建搞成随机失败）。
+
+      - name: Prepare fixed signing keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ORANGE_KEYSTORE_BASE64 }}
+        run: |
+          set -euo pipefail
+          missing=0
+          for name in KEYSTORE_BASE64 ORANGE_KEYSTORE_PASSWORD ORANGE_KEY_ALIAS ORANGE_KEY_PASSWORD; do
+            if [ -z "${!name:-}" ]; then
+              echo "::error::缺少 secret ${name}（在仓库 Actions secrets 里配置后重跑）"
+              missing=1
+            fi
+          done
+          [ "$missing" -eq 0 ] || exit 1
+          KEYSTORE_PATH="$GITHUB_WORKSPACE/android/$ORANGE_KEYSTORE_FILENAME"
+          printf '%s' "$KEYSTORE_BASE64" | base64 -d > "$KEYSTORE_PATH"
+          chmod 600 "$KEYSTORE_PATH"
+          echo "ORANGE_KEYSTORE_FILE=$KEYSTORE_PATH" >> "$GITHUB_ENV"
+          echo "keystore 已写入 $KEYSTORE_PATH ($(stat -c %s "$KEYSTORE_PATH") bytes)"
+          # 指纹守卫：确认注入的确实是本项目的固定 keystore（换错/被替换会立刻失败）
+          KEYSTORE_SHA=$(sha256sum "$KEYSTORE_PATH" | awk '{print $1}')
+          echo "keystore sha256=$KEYSTORE_SHA"
+          if [ "$KEYSTORE_SHA" != "822cd655a5c08c9e1acfc935e360565f3081708529a09d69ba036275a44e908f" ]; then
+            echo "::error::keystore 与预期的固定签名文件不一致，拒绝用它签名"
+            exit 1
+          fi
+          keytool -list -keystore "$KEYSTORE_PATH" -storepass "$ORANGE_KEYSTORE_PASSWORD" -alias "$ORANGE_KEY_ALIAS" > /dev/null
+          echo "keystore 校验通过：alias=$ORANGE_KEY_ALIAS"
+          # 证书指纹是公开信息，打印出来方便和本地/历史 APK 对照
+          keytool -list -v -keystore "$KEYSTORE_PATH" -storepass "$ORANGE_KEYSTORE_PASSWORD" -alias "$ORANGE_KEY_ALIAS" \
+            | grep -E "SHA256:|SHA-256" | head -2 || true
+          echo "::add-mask::$ORANGE_KEYSTORE_PASSWORD"
+
+      - name: Assemble debug + release APK
+        run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew --no-daemon assembleDebug assembleRelease
+
+      - name: Collect APKs
+        id: collect
+        run: |
+          set -euo pipefail
+          SHA_SHORT=$(git rev-parse --short HEAD)
+          mkdir -p out
+          cp android/app/build/outputs/apk/debug/app-debug.apk \
+             "out/orange-generator-debug-${SHA_SHORT}.apk"
+          cp android/app/build/outputs/apk/release/app-release.apk \
+             "out/orange-generator-release-${SHA_SHORT}.apk"
+          ls -lh out/
+          # 两个包作为两个独立 artifact 上传（Actions 页面上能看到两条产物）
+          echo "debug_name=orange-generator-debug-${SHA_SHORT}" >> "$GITHUB_OUTPUT"
+          echo "release_name=orange-generator-release-${SHA_SHORT}" >> "$GITHUB_OUTPUT"
+          echo "sha_short=${SHA_SHORT}" >> "$GITHUB_OUTPUT"
+
+      - name: Verify both APKs share one signature
+        run: |
+          APKSIGNER=$(ls "$ANDROID_HOME"/build-tools/*/apksigner 2>/dev/null | sort -V | tail -1)
+          if [ -z "$APKSIGNER" ]; then
+            APKSIGNER=$(ls /usr/local/lib/android/sdk/build-tools/*/apksigner 2>/dev/null | sort -V | tail -1)
+          fi
+          if [ -z "$APKSIGNER" ]; then
+            echo "::error::找不到 apksigner，无法校验签名"
+            exit 1
+          fi
+          echo "apksigner=$APKSIGNER"
+          "$APKSIGNER" version || true
+
+          # 注意：不同 build-tools 的 apksigner 输出格式不同
+          #   34.x: "Signer #1 certificate SHA-256 digest: <hex>"
+          #   37.x: "V3.0 Signer: certificate SHA-256 digest: <hex>"
+          # 所以这里只按字段名匹配，别绑定前缀。
+          DIGESTS_FILE=$(mktemp)
+          for apk in out/*.apk; do
+            echo "== $apk =="
+            set +e
+            RAW=$("$APKSIGNER" verify --print-certs "$apk" 2>&1)
+            RC=$?
+            set -e
+            if [ "$RC" -ne 0 ]; then
+              echo "$RAW" | head -30
+              echo "::error::$apk 验签失败（apksigner exit=$RC）"
+              exit 1
+            fi
+            echo "$RAW" | grep -iE "signer.*certificate.*(DN|SHA-256)" | sort -u
+            echo "$RAW" | grep -iE "certificate SHA-256 digest:" | awk -F': ' '{print $NF}' | sort -u >> "$DIGESTS_FILE"
+          done
+
+          UNIQ=$(sort -u "$DIGESTS_FILE" | sed '/^$/d')
+          echo "去重后的签名（SHA-256）："
+          echo "$UNIQ"
+          if [ "$(echo "$UNIQ" | sed '/^$/d' | wc -l)" -ne 1 ]; then
+            echo "::error::debug 与 release 签名不一致"
+            exit 1
+          fi
+          echo "✓ debug 与 release 签名一致"
+
+      # 双保险：确认待上传目录里只有 APK，没有 keystore / 口令文件混进去
+      - name: Assert no signing material in upload dir
+        run: |
+          echo "upload dir 内容："
+          ls -la out/
+          if find out -type f ! -name '*.apk' | grep -q .; then
+            echo "::error::out/ 里出现了非 APK 文件，拒绝上传"
+            find out -type f ! -name '*.apk'
+            exit 1
+          fi
+          if find . -path ./node_modules -prune -o \( -name '*.jks' -o -name '*.keystore' -o -name 'keystore.properties' \) -print | grep -q keystore; then
+            echo "::warning::工作区里存在 keystore 文件（仅存在于本次 runner，不会进 artifact）"
+          fi
+          echo "✓ 上传目录只有 APK"
+
+      # 两个包各上传一次，在 Actions 页面就是两条独立产物
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ steps.collect.outputs.debug_name }}
+          path: out/orange-generator-debug-*.apk
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload release APK
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ steps.collect.outputs.release_name }}
+          path: out/orange-generator-release-*.apk
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Summary
+        run: |
+          {
+            echo "### 贴贴岛 APK 构建完成"
+            echo
+            echo "- commit: \`${{ steps.collect.outputs.sha_short }}\`"
+            echo "- artifact: \`${{ steps.collect.outputs.debug_name }}\` / \`${{ steps.collect.outputs.release_name }}\`"
+            echo "- 本机下载：\`gh run download <run-id> -n ${{ steps.collect.outputs.release_name }} -D /tmp/apk\`"
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,115 @@
+apply plugin: 'com.android.application'
+
+/**
+ * 固定签名：debug 与 release 用同一套 keystore，签名不随构建机变化，
+ * 两个包可以互相覆盖升级。
+ *
+ * 取值优先级：
+ *   1. 环境变量 ORANGE_KEYSTORE_FILE / ORANGE_KEYSTORE_PASSWORD /
+ *      ORANGE_KEY_ALIAS / ORANGE_KEY_PASSWORD（CI 从 GitHub Secrets 注入）
+ *   2. android/keystore.properties（本机开发用，已在 .gitignore 里）
+ *
+ * 两者都没有时：debug 回落到 Android 默认 debug keystore，
+ * release 不签名（assembleRelease 产出 app-release-unsigned.apk）。
+ */
+def keystorePropsFile = rootProject.file('keystore.properties')
+def keystoreProps = new Properties()
+if (keystorePropsFile.exists()) {
+    keystorePropsFile.withInputStream { keystoreProps.load(it) }
+}
+
+def envOrProp = { String envName, String propName ->
+    def fromEnv = System.getenv(envName)
+    return (fromEnv != null && !fromEnv.trim().isEmpty()) ? fromEnv : keystoreProps.getProperty(propName)
+}
+
+def keystorePath = envOrProp('ORANGE_KEYSTORE_FILE', 'storeFile')
+def releaseStorePassword = envOrProp('ORANGE_KEYSTORE_PASSWORD', 'storePassword')
+def releaseKeyAlias = envOrProp('ORANGE_KEY_ALIAS', 'keyAlias')
+def releaseKeyPassword = envOrProp('ORANGE_KEY_PASSWORD', 'keyPassword')
+def hasReleaseSigning = keystorePath != null && releaseStorePassword != null && releaseKeyAlias != null
+
+if (hasReleaseSigning && !file(keystorePath).exists()) {
+    throw new GradleException("固定签名 keystore 不存在：${keystorePath}（检查 ORANGE_KEYSTORE_FILE / storeFile 配置）")
+}
+
+android {
+    namespace "io.github.jrbtxus.orangegenerator"
+    compileSdk rootProject.ext.compileSdkVersion
+    defaultConfig {
+        applicationId "io.github.jrbtxus.orangegenerator"
+        minSdkVersion rootProject.ext.minSdkVersion
+        targetSdkVersion rootProject.ext.targetSdkVersion
+        versionCode 1
+        versionName "1.0.0"
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+        aaptOptions {
+             // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
+             // Default: https://android.googlesource.com/platform/frameworks/base/+/282e181b58cf72b6ca770dc7ca5f91f135444502/tools/aapt/AaptAssets.cpp#61
+            ignoreAssetsPattern '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
+        }
+    }
+
+    signingConfigs {
+        if (hasReleaseSigning) {
+            fixed {
+                storeFile file(keystorePath)
+                storePassword releaseStorePassword
+                keyAlias releaseKeyAlias
+                keyPassword releaseKeyPassword ?: releaseStorePassword
+                // v1 + v2 + v3，旧系统与 Android 7+ 都能验签
+                enableV1Signing true
+                enableV2Signing true
+                enableV3Signing true
+            }
+        }
+    }
+
+    buildTypes {
+        debug {
+            if (hasReleaseSigning) {
+                signingConfig signingConfigs.fixed
+            }
+        }
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+            if (hasReleaseSigning) {
+                signingConfig signingConfigs.fixed
+            }
+        }
+    }
+}
+
+if (!hasReleaseSigning) {
+    logger.warn('[signing] 未提供固定 keystore（环境变量或 android/keystore.properties），debug 使用默认 debug 签名，release 不签名')
+}
+
+repositories {
+    flatDir{
+        dirs '../capacitor-cordova-android-plugins/src/main/libs', 'libs'
+    }
+}
+
+dependencies {
+    implementation fileTree(include: ['*.jar'], dir: 'libs')
+    implementation "androidx.appcompat:appcompat:$androidxAppCompatVersion"
+    implementation "androidx.coordinatorlayout:coordinatorlayout:$androidxCoordinatorLayoutVersion"
+    implementation "androidx.core:core-splashscreen:$coreSplashScreenVersion"
+    implementation project(':capacitor-android')
+    testImplementation "junit:junit:$junitVersion"
+    androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
+    androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"
+    implementation project(':capacitor-cordova-android-plugins')
+}
+
+apply from: 'capacitor.build.gradle'
+
+try {
+    def servicesJSON = file('google-services.json')
+    if (servicesJSON.text) {
+        apply plugin: 'com.google.gms.google-services'
+    }
+} catch(Exception e) {
+    logger.info("google-services.json not found, google-services plugin not applied. Push Notifications won't work")
+}

@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 自适应图标背景色：被 mipmap-anydpi-v26/*.xml 引用（渐变兜底为这个纯色） -->
+    <color name="ic_launcher_background">#92D2F6</color>
+</resources>

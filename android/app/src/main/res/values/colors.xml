@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  颜色取自站点主题（src/styles.css 的 :root 变量与 index.html 的 theme-color）：
+    天蓝 sky #2ebdf8 / sky-deep #178ec4、橙 orange #ffa011、
+    页面渐变顶部 #92d2f6（loading-layer 与 body 都是这个渐变）。
+  注意：XML 注释里不能出现连续两个短横线，所以这里不写 CSS 变量名原文。
+-->
+<resources>
+    <color name="colorPrimary">#2EBDF8</color>
+    <color name="colorPrimaryDark">#178EC4</color>
+    <color name="colorAccent">#FFA011</color>
+
+    <!-- 启动图顶部底色，与页面渐变的第一段 #92d2f6 一致，切换时不闪白 -->
+    <color name="splashBackground">#92D2F6</color>
+</resources>
